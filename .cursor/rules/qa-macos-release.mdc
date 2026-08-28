@@ -39,9 +39,10 @@ Manual runs can also set **no_cache** in workflow_dispatch.
 
 ## After the workflow runs
 
-1. Open your Cloudflare R2 bucket (`openwhispr-qa`)
+1. Open the shared **Google Drive QA folder** (not GitHub Actions artifacts)
 2. Download `mac-arm64-v0.0.1.zip` (or matching tag name)
 3. Unzip → contains a `.dmg` or `.app`
+4. Old `mac-*.zip` files are removed from Drive after **24 hours**
 5. **Bypass Gatekeeper (Unsigned build):** macOS will say the app is "damaged" because it is unsigned. Open Terminal and run:
    ```bash
    xattr -cr /path/to/unzipped/OpenWhispr.app
@@ -59,10 +60,9 @@ Manual runs can also set **no_cache** in workflow_dispatch.
 
 ## Secrets (`stage_env` environment)
 
-- `R2_ACCESS_KEY_ID` — Cloudflare R2 API token access key
-- `R2_SECRET_ACCESS_KEY` — Cloudflare R2 API token secret key
-- `R2_ENDPOINT` — Cloudflare R2 S3 API endpoint URL (e.g. `https://<account_id>.r2.cloudflarestorage.com`)
+- `GDRIVE_RCLONE_TOKEN` — Google Drive rclone OAuth token json
+- `GDRIVE_QA_FOLDER_ID` — target Drive folder ID
 
 ## Notes
 
-- Builds upload to **Cloudflare R2** (`openwhispr-qa` bucket); the workflow deletes matching QA GitHub Actions artifacts afterward to save storage
+- Builds upload to **Google Drive**; the workflow deletes matching QA GitHub Actions artifacts afterward to save storage
