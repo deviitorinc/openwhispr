@@ -10,35 +10,59 @@ Use the **Build Without Notarize** workflow (`.github/workflows/build-without-no
 
 ## Tag format
 
-| Tag | Architecture |
-|-----|--------------|
-| `mac-arm64-vX.Y.Z` | Apple Silicon |
-| `mac-x64-vX.Y.Z` | Intel |
+| Tag | Architecture | GitHub cache |
+|-----|--------------|--------------|
+| `mac-arm64-vX.Y.Z` | Apple Silicon | Yes |
+| `mac-x64-vX.Y.Z` | Intel | Yes |
+| `mac-arm64-no-cache-vX.Y.Z` | Apple Silicon | No — fresh downloads |
+| `mac-x64-no-cache-vX.Y.Z` | Intel | No — fresh downloads |
 
 ## Release commands
 
 Replace `0.0.1` with the QA version.
 
 ```bash
-# Apple Silicon
+# Apple Silicon (cached binaries when possible)
 git tag mac-arm64-v0.0.1
 git push origin mac-arm64-v0.0.1
 
-# Intel Macs
+# Intel Macs (cached binaries when possible)
 git tag mac-x64-v0.0.1
 git push origin mac-x64-v0.0.1
+
+# Force fresh binary downloads (skip GitHub Actions cache)
+git tag mac-arm64-no-cache-v0.0.1
+git push origin mac-arm64-no-cache-v0.0.1
 ```
+
+Manual runs can also set **no_cache** in workflow_dispatch.
 
 ## After the workflow runs
 
-1. Open **Actions** → the run for that tag
-2. Download artifact named after the tag (e.g. `mac-arm64-v0.0.1`)
-3. Unzip → `mac-arm64-v0.0.1.zip` contains a `.dmg` or `.app`
-4. Artifacts expire after **24 hours**
-5. Unsigned build: right-click the app → **Open** the first time (Gatekeeper)
+1. Open the shared **Google Drive QA folder** (not GitHub Actions artifacts)
+2. Download `mac-arm64-v0.0.1.zip` (or matching tag name)
+3. Unzip → contains a `.dmg` or `.app`
+4. Old `mac-*.zip` files are removed from Drive after **24 hours**
+5. **Bypass Gatekeeper (Unsigned build):** macOS will say the app is "damaged" because it is unsigned. Open Terminal and run:
+   ```bash
+   xattr -cr /path/to/unzipped/OpenWhispr.app
+   ```
+   Then you can open it normally.
+
+## Binary caching (GitHub Actions)
+
+- **Prebuilt cache** (~400 MB/arch): whisper, llama, sherpa, qdrant, yt-dlp, meeting-aec, whisper-vad
+- **Native cache**: compiled macOS helpers (globe, mic, audio-tap, etc.)
+- **Electron cache**: separate, keyed on `pnpm-lock.yaml`
+- Cache keys include pinned download versions (`scripts/ci-qa-cache-versions.js`)
+- Free org limit: **10 GB cache per repo** (separate from the 500 MB artifact limit)
+- `-no-cache` tags skip restore/save and pass `--force` to download scripts
+
+## Secrets (`stage_env` environment)
+
+- `GDRIVE_SERVICE_ACCOUNT_JSON` — Google service account key
+- `GDRIVE_QA_FOLDER_ID` — target Drive folder ID
 
 ## Notes
 
-- Builds are **not** signed or notarized (`CSC_IDENTITY_AUTO_DISCOVERY=false`)
-- Tag push triggers the workflow; architecture is parsed from the tag name
-- For both architectures, push **both** tags
+- Builds upload to **Google Drive**; the workflow deletes matching QA GitHub Actions artifacts afterward to save storage

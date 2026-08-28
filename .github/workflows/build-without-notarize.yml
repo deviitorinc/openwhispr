@@ -5,12 +5,18 @@ on:
     tags:
       - "mac-arm64-v*"
       - "mac-x64-v*"
+      - "mac-arm64-no-cache-v*"
+      - "mac-x64-no-cache-v*"
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "QA tag (e.g. mac-arm64-v0.0.1 or mac-x64-v0.0.1)"
+        description: "QA tag (e.g. mac-arm64-v0.0.1 or mac-arm64-no-cache-v0.0.1)"
         required: true
         default: mac-arm64-v0.0.0-qa
+      no_cache:
+        description: "Skip GitHub Actions cache and force fresh binary downloads"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,20 +33,38 @@ jobs:
   build-macos-qa:
     name: macOS QA (${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }})
     runs-on: macos-latest
+    environment: stage_env
     steps:
       - uses: actions/checkout@v4
 
       - name: Parse QA tag
         run: |
-          if [[ "$QA_TAG" =~ ^mac-arm64-v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+          NO_CACHE=false
+          if [[ "$QA_TAG" == *"-no-cache-"* ]]; then
+            NO_CACHE=true
+          fi
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.no_cache }}" == "true" ]]; then
+            NO_CACHE=true
+          fi
+          echo "SKIP_GITHUB_CACHE=$NO_CACHE" >> "$GITHUB_ENV"
+
+          if [[ "$QA_TAG" =~ ^mac-arm64(-no-cache)?-v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
             echo "BUILD_ARCH=arm64" >> "$GITHUB_ENV"
-          elif [[ "$QA_TAG" =~ ^mac-x64-v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+          elif [[ "$QA_TAG" =~ ^mac-x64(-no-cache)?-v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
             echo "BUILD_ARCH=x64" >> "$GITHUB_ENV"
           else
-            echo "::error::Tag must be mac-arm64-vX.Y.Z or mac-x64-vX.Y.Z (e.g. mac-arm64-v0.0.1)"
+            echo "::error::Tag must be mac-arm64-vX.Y.Z, mac-arm64-no-cache-vX.Y.Z, mac-x64-vX.Y.Z, or mac-x64-no-cache-vX.Y.Z"
             exit 1
           fi
+
+          if [[ "$NO_CACHE" == "true" ]]; then
+            echo "GitHub Actions cache disabled for this run (fresh binary downloads)."
+          fi
           echo "Building for arch: $BUILD_ARCH from tag: $QA_TAG"
+
+      - name: Compute prebuilt cache key
+        id: prebuilt-versions
+        run: echo "key=$(node scripts/ci-qa-cache-versions.js)" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -49,7 +73,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
-          cache: pnpm
+          cache: ${{ env.SKIP_GITHUB_CACHE != 'true' && 'pnpm' || '' }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -68,13 +92,36 @@ jobs:
       - name: Compile macOS app icon
         run: pnpm compile:mac-icon
 
-      - name: Cache native binaries
+      - name: Restore prebuilt binary cache
+        if: env.SKIP_GITHUB_CACHE != 'true'
         uses: actions/cache@v4
+        id: prebuilt-cache
         with:
-          path: resources/bin
-          key: qa-macos-${{ env.BUILD_ARCH }}-bin-${{ hashFiles('scripts/download-*.js', 'scripts/build-globe-listener.js', 'resources/macos-globe-listener.swift', 'scripts/build-macos-fast-paste.js', 'resources/macos-fast-paste.swift', 'scripts/build-media-remote.js', 'resources/macos-media-remote.swift', 'scripts/build-macos-audio-tap.js', 'resources/macos-audio-tap.swift') }}
+          path: ~/.cache/openwhispr/qa/prebuilt/${{ env.BUILD_ARCH }}
+          key: qa-prebuilt-${{ env.BUILD_ARCH }}-v1-${{ steps.prebuilt-versions.outputs.key }}-${{ hashFiles('scripts/download-qdrant.js') }}
+          restore-keys: |
+            qa-prebuilt-${{ env.BUILD_ARCH }}-v1-${{ steps.prebuilt-versions.outputs.key }}-
+            qa-prebuilt-${{ env.BUILD_ARCH }}-v1-
+
+      - name: Restore compiled native binary cache
+        if: env.SKIP_GITHUB_CACHE != 'true'
+        uses: actions/cache@v4
+        id: native-cache
+        with:
+          path: ~/.cache/openwhispr/qa/native/${{ env.BUILD_ARCH }}
+          key: qa-native-${{ env.BUILD_ARCH }}-v1-${{ hashFiles('scripts/build-globe-listener.js', 'resources/macos-globe-listener.swift', 'scripts/build-macos-fast-paste.js', 'resources/macos-fast-paste.swift', 'scripts/build-media-remote.js', 'resources/macos-media-remote.swift', 'scripts/build-macos-audio-tap.js', 'resources/macos-audio-tap.swift', 'scripts/build-macos-mic-listener.js', 'resources/macos-mic-listener.swift', 'scripts/build-macos-calendar-listener.js', 'resources/macos-calendar-listener.swift', 'scripts/build-text-monitor.js', 'resources/macos-text-monitor.swift', 'scripts/build-mediaremote-adapter.js') }}
+          restore-keys: |
+            qa-native-${{ env.BUILD_ARCH }}-v1-
+
+      - name: Hydrate binaries from cache
+        if: env.SKIP_GITHUB_CACHE != 'true'
+        run: |
+          mkdir -p resources/bin
+          node scripts/ci-qa-binary-cache.js import-prebuilt "$HOME/.cache/openwhispr/qa/prebuilt/${{ env.BUILD_ARCH }}" "${{ env.BUILD_ARCH }}"
+          node scripts/ci-qa-binary-cache.js import-native "$HOME/.cache/openwhispr/qa/native/${{ env.BUILD_ARCH }}"
 
       - name: Compile macOS native binaries
+        if: env.SKIP_GITHUB_CACHE == 'true' || steps.native-cache.outputs.cache-hit != 'true'
         run: |
           pnpm compile:globe -- --arch ${{ env.BUILD_ARCH }}
           pnpm compile:fast-paste -- --arch ${{ env.BUILD_ARCH }}
@@ -85,19 +132,40 @@ jobs:
           pnpm compile:mic-listener -- --arch ${{ env.BUILD_ARCH }}
           pnpm compile:calendar-listener -- --arch ${{ env.BUILD_ARCH }}
 
+      - name: Export compiled native binaries to cache staging
+        if: env.SKIP_GITHUB_CACHE != 'true'
+        run: node scripts/ci-qa-binary-cache.js export-native "$HOME/.cache/openwhispr/qa/native/${{ env.BUILD_ARCH }}"
+
       - name: Download platform binaries
         run: |
-          node scripts/download-whisper-cpp.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
-          node scripts/download-llama-server.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
-          node scripts/download-sherpa-onnx.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
-          node scripts/download-yt-dlp.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
-          node scripts/download-qdrant.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
-          node scripts/download-meeting-aec-helper.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
-          node scripts/download-whisper-vad-model.js
+          mkdir -p resources/bin
+          FORCE_FLAG=""
+          if [[ "${{ env.SKIP_GITHUB_CACHE }}" == "true" ]]; then
+            FORCE_FLAG="--force"
+          fi
+
+          run_download() {
+            node "$@" $FORCE_FLAG
+          }
+
+          run_download scripts/download-whisper-cpp.js --current --platform darwin --arch ${{ env.BUILD_ARCH }} &
+          run_download scripts/download-llama-server.js --current --platform darwin --arch ${{ env.BUILD_ARCH }} &
+          run_download scripts/download-sherpa-onnx.js --current --platform darwin --arch ${{ env.BUILD_ARCH }} &
+          run_download scripts/download-yt-dlp.js --current --platform darwin --arch ${{ env.BUILD_ARCH }} &
+          run_download scripts/download-qdrant.js --current --platform darwin --arch ${{ env.BUILD_ARCH }} &
+          run_download scripts/download-meeting-aec-helper.js --current --platform darwin --arch ${{ env.BUILD_ARCH }} &
+          wait
+
+          run_download scripts/download-whisper-vad-model.js
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
 
+      - name: Export prebuilt binaries to cache staging
+        if: env.SKIP_GITHUB_CACHE != 'true'
+        run: node scripts/ci-qa-binary-cache.js export-prebuilt "$HOME/.cache/openwhispr/qa/prebuilt/${{ env.BUILD_ARCH }}" "${{ env.BUILD_ARCH }}"
+
       - name: Cache Electron
+        if: env.SKIP_GITHUB_CACHE != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.cache/electron
@@ -147,10 +215,74 @@ jobs:
 
           ls -lh "$ZIP_PATH"
 
-      - name: Upload QA macOS build
-        uses: actions/upload-artifact@v4
+      - name: Install rclone
+        run: brew install rclone
+
+      - name: Upload QA build to Google Drive
+        env:
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_QA_FOLDER_ID: ${{ secrets.GDRIVE_QA_FOLDER_ID }}
+        run: |
+          SA_FILE="$RUNNER_TEMP/gdrive-sa.json"
+          printf '%s' "$GDRIVE_SERVICE_ACCOUNT_JSON" > "$SA_FILE"
+
+          export RCLONE_CONFIG_GDRIVE_TYPE=drive
+          export RCLONE_CONFIG_GDRIVE_SCOPE=drive
+          export RCLONE_CONFIG_GDRIVE_SERVICE_ACCOUNT_FILE="$SA_FILE"
+          export RCLONE_CONFIG_GDRIVE_ROOT_FOLDER_ID="$GDRIVE_QA_FOLDER_ID"
+
+          ZIP_PATH="dist/qa/${QA_TAG}.zip"
+          test -f "$ZIP_PATH" || { echo "::error::Missing $ZIP_PATH"; exit 1; }
+
+          # Replace any prior upload for this tag, then upload the fresh build.
+          rclone delete "gdrive:${QA_TAG}.zip" 2>/dev/null || true
+          rclone copyto "$ZIP_PATH" "gdrive:${QA_TAG}.zip" -v
+
+          # Drop QA zips older than 24 hours to mirror prior artifact retention.
+          rclone delete "gdrive:" --include "mac-*.zip" --min-age 24h || true
+
+          rm -f "$SA_FILE"
+          echo "Uploaded to Google Drive as ${QA_TAG}.zip"
+
+      - name: Delete GitHub Actions artifacts
+        if: always()
+        uses: actions/github-script@v7
         with:
-          name: ${{ env.QA_TAG }}
-          path: dist/qa/${{ env.QA_TAG }}.zip
-          retention-days: 1
-          if-no-files-found: error
+          script: |
+            const { owner, repo } = context.repo;
+            let page = 1;
+            let deleted = 0;
+
+            while (true) {
+              const response = await github.rest.actions.listArtifactsForRepo({
+                owner,
+                repo,
+                per_page: 100,
+                page,
+              });
+
+              for (const artifact of response.data.artifacts) {
+                if (artifact.expired) {
+                  continue;
+                }
+
+                if (!/^mac-(arm64|x64)(-no-cache)?-v/.test(artifact.name)) {
+                  continue;
+                }
+
+                await github.rest.actions.deleteArtifact({
+                  owner,
+                  repo,
+                  artifact_id: artifact.id,
+                });
+                deleted += 1;
+              }
+
+              if (response.data.artifacts.length < 100) {
+                break;
+              }
+
+              page += 1;
+            }
+
+            core.info(`Deleted ${deleted} QA GitHub Actions artifact(s) to stay within storage limits.`);
