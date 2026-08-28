@@ -222,12 +222,16 @@ jobs:
         env:
           GDRIVE_RCLONE_TOKEN: ${{ secrets.GDRIVE_RCLONE_TOKEN }}
           GDRIVE_QA_FOLDER_ID: ${{ secrets.GDRIVE_QA_FOLDER_ID }}
+          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
         run: |
           mkdir -p ~/.config/rclone
           cat <<CONFIG > ~/.config/rclone/rclone.conf
           [gdrive]
           type = drive
-          scope = drive.file
+          scope = drive
+          client_id = $GDRIVE_CLIENT_ID
+          client_secret = $GDRIVE_CLIENT_SECRET
           token = $GDRIVE_RCLONE_TOKEN
           CONFIG
 
