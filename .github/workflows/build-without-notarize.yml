@@ -78,7 +78,9 @@ jobs:
         run: |
           pnpm compile:globe -- --arch ${{ env.BUILD_ARCH }}
           pnpm compile:fast-paste -- --arch ${{ env.BUILD_ARCH }}
+          pnpm compile:text-monitor
           pnpm compile:media-remote -- --arch ${{ env.BUILD_ARCH }}
+          pnpm compile:mediaremote-adapter -- --arch ${{ env.BUILD_ARCH }}
           pnpm compile:audio-tap -- --arch ${{ env.BUILD_ARCH }}
           pnpm compile:mic-listener -- --arch ${{ env.BUILD_ARCH }}
           pnpm compile:calendar-listener -- --arch ${{ env.BUILD_ARCH }}
