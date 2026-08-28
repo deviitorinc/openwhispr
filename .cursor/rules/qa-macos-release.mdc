@@ -1,0 +1,44 @@
+---
+description: QA macOS unsigned release tags and workflow
+globs: .github/workflows/**
+alwaysApply: false
+---
+
+# QA macOS Release (Unsigned)
+
+Use the **Build Without Notarize** workflow (`.github/workflows/build-without-notarize.yml`).
+
+## Tag format
+
+| Tag | Architecture |
+|-----|--------------|
+| `mac-arm64-vX.Y.Z` | Apple Silicon |
+| `mac-x64-vX.Y.Z` | Intel |
+
+## Release commands
+
+Replace `0.0.1` with the QA version.
+
+```bash
+# Apple Silicon
+git tag mac-arm64-v0.0.1
+git push origin mac-arm64-v0.0.1
+
+# Intel Macs
+git tag mac-x64-v0.0.1
+git push origin mac-x64-v0.0.1
+```
+
+## After the workflow runs
+
+1. Open **Actions** → the run for that tag
+2. Download artifact named after the tag (e.g. `mac-arm64-v0.0.1`)
+3. Unzip → `mac-arm64-v0.0.1.zip` contains a `.dmg` or `.app`
+4. Artifacts expire after **24 hours**
+5. Unsigned build: right-click the app → **Open** the first time (Gatekeeper)
+
+## Notes
+
+- Builds are **not** signed or notarized (`CSC_IDENTITY_AUTO_DISCOVERY=false`)
+- Tag push triggers the workflow; architecture is parsed from the tag name
+- For both architectures, push **both** tags
