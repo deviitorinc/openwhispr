@@ -228,7 +228,7 @@ jobs:
           cat <<CONFIG > ~/.config/rclone/rclone.conf
           [gdrive]
           type = drive
-          scope = drive.file
+          scope = drive
           client_id = $GDRIVE_CLIENT_ID
           client_secret = $GDRIVE_CLIENT_SECRET
           token = $GDRIVE_RCLONE_TOKEN
