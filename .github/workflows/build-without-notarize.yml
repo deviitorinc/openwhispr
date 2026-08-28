@@ -56,13 +56,17 @@ jobs:
 
       - name: Rebuild native dependencies
         run: |
-          pnpm rebuild electron better-sqlite3 ffmpeg-static esbuild onnxruntime-node
+          pnpm rebuild electron better-sqlite3 esbuild onnxruntime-node
 
-      - name: Install ffmpeg-static for target architecture
-        if: env.BUILD_ARCH == 'x64'
+      - name: Install ffmpeg-static binary
         run: |
-          rm -f node_modules/ffmpeg-static/ffmpeg
-          npm_config_arch=x64 node node_modules/ffmpeg-static/install.js
+          FFMPEG_DIR=$(node -p "require('path').dirname(require.resolve('ffmpeg-static/package.json'))")
+          rm -f "$FFMPEG_DIR/ffmpeg"
+          npm_config_arch=${{ env.BUILD_ARCH }} node "$FFMPEG_DIR/install.js"
+          test -x "$FFMPEG_DIR/ffmpeg" || { echo "::error::ffmpeg binary missing after install"; exit 1; }
+
+      - name: Compile macOS app icon
+        run: pnpm compile:mac-icon
 
       - name: Cache native binaries
         uses: actions/cache@v4
