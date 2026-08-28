@@ -61,7 +61,8 @@ Manual runs can also set **no_cache** in workflow_dispatch.
 ## Secrets (`stage_env` environment)
 
 - `GDRIVE_RCLONE_TOKEN` — Google Drive rclone OAuth token json
-- `GDRIVE_QA_FOLDER_ID` — target Drive folder ID
+- `GDRIVE_CLIENT_ID` — Custom OAuth Client ID
+- `GDRIVE_CLIENT_SECRET` — Custom OAuth Client Secret
 
 ## Notes
 

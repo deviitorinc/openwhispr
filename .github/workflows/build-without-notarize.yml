@@ -221,7 +221,6 @@ jobs:
       - name: Upload QA build to Google Drive
         env:
           GDRIVE_RCLONE_TOKEN: ${{ secrets.GDRIVE_RCLONE_TOKEN }}
-          GDRIVE_QA_FOLDER_ID: ${{ secrets.GDRIVE_QA_FOLDER_ID }}
           GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
           GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
         run: |
@@ -229,7 +228,7 @@ jobs:
           cat <<CONFIG > ~/.config/rclone/rclone.conf
           [gdrive]
           type = drive
-          scope = drive
+          scope = drive.file
           client_id = $GDRIVE_CLIENT_ID
           client_secret = $GDRIVE_CLIENT_SECRET
           token = $GDRIVE_RCLONE_TOKEN
@@ -238,15 +237,18 @@ jobs:
           ZIP_PATH="dist/qa/${QA_TAG}.zip"
           test -f "$ZIP_PATH" || { echo "::error::Missing $ZIP_PATH"; exit 1; }
 
+          # Make sure the folder exists (creates it if rclone hasn't already)
+          rclone mkdir "gdrive:OpenWishperProject/app-builds" 2>/dev/null || true
+
           # Replace any prior upload for this tag, then upload the fresh build.
-          rclone delete "gdrive:${QA_TAG}.zip" --drive-root-folder-id="$GDRIVE_QA_FOLDER_ID" 2>/dev/null || true
-          rclone copyto "$ZIP_PATH" "gdrive:${QA_TAG}.zip" --drive-root-folder-id="$GDRIVE_QA_FOLDER_ID" -v
+          rclone delete "gdrive:OpenWishperProject/app-builds/${QA_TAG}.zip" 2>/dev/null || true
+          rclone copyto "$ZIP_PATH" "gdrive:OpenWishperProject/app-builds/${QA_TAG}.zip" -v
 
           # Drop QA zips older than 24 hours to mirror prior artifact retention.
-          rclone delete "gdrive:" --drive-root-folder-id="$GDRIVE_QA_FOLDER_ID" --include "mac-*.zip" --min-age 24h || true
+          rclone delete "gdrive:OpenWishperProject/app-builds" --include "mac-*.zip" --min-age 24h || true
 
           rm -rf ~/.config/rclone
-          echo "Uploaded to Google Drive as ${QA_TAG}.zip"
+          echo "Uploaded to Google Drive app-builds as ${QA_TAG}.zip"
 
       - name: Delete GitHub Actions artifacts
         if: always()
