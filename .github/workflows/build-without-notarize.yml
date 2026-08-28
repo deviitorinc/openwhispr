@@ -107,8 +107,9 @@ jobs:
       - name: Build unsigned macOS app
         run: |
           pnpm build:renderer
-          cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --${{ env.BUILD_ARCH }} --publish never
+          pnpm exec electron-builder --mac --${{ env.BUILD_ARCH }} --publish never
         env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
           TARGET_ARCH: ${{ env.BUILD_ARCH }}
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
           VITE_AUTH_URL: ${{ vars.VITE_AUTH_URL || 'https://auth.openwhispr.com' }}
