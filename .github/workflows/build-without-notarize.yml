@@ -1,0 +1,149 @@
+name: Build Without Notarize
+
+on:
+  push:
+    tags:
+      - "mac-arm64-v*"
+      - "mac-x64-v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "QA tag (e.g. mac-arm64-v0.0.1 or mac-x64-v0.0.1)"
+        required: true
+        default: mac-arm64-v0.0.0-qa
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: qa-macos-build-${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  QA_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+
+jobs:
+  build-macos-qa:
+    name: macOS QA (${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }})
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse QA tag
+        run: |
+          if [[ "$QA_TAG" =~ ^mac-arm64-v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "BUILD_ARCH=arm64" >> "$GITHUB_ENV"
+          elif [[ "$QA_TAG" =~ ^mac-x64-v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+            echo "BUILD_ARCH=x64" >> "$GITHUB_ENV"
+          else
+            echo "::error::Tag must be mac-arm64-vX.Y.Z or mac-x64-vX.Y.Z (e.g. mac-arm64-v0.0.1)"
+            exit 1
+          fi
+          echo "Building for arch: $BUILD_ARCH from tag: $QA_TAG"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Rebuild native dependencies
+        run: |
+          pnpm rebuild electron better-sqlite3 ffmpeg-static esbuild onnxruntime-node
+
+      - name: Install ffmpeg-static for target architecture
+        if: env.BUILD_ARCH == 'x64'
+        run: |
+          rm -f node_modules/ffmpeg-static/ffmpeg
+          npm_config_arch=x64 node node_modules/ffmpeg-static/install.js
+
+      - name: Cache native binaries
+        uses: actions/cache@v4
+        with:
+          path: resources/bin
+          key: qa-macos-${{ env.BUILD_ARCH }}-bin-${{ hashFiles('scripts/download-*.js', 'scripts/build-globe-listener.js', 'resources/macos-globe-listener.swift', 'scripts/build-macos-fast-paste.js', 'resources/macos-fast-paste.swift', 'scripts/build-media-remote.js', 'resources/macos-media-remote.swift', 'scripts/build-macos-audio-tap.js', 'resources/macos-audio-tap.swift') }}
+
+      - name: Compile macOS native binaries
+        run: |
+          pnpm compile:globe -- --arch ${{ env.BUILD_ARCH }}
+          pnpm compile:fast-paste -- --arch ${{ env.BUILD_ARCH }}
+          pnpm compile:media-remote -- --arch ${{ env.BUILD_ARCH }}
+          pnpm compile:audio-tap -- --arch ${{ env.BUILD_ARCH }}
+          pnpm compile:mic-listener -- --arch ${{ env.BUILD_ARCH }}
+          pnpm compile:calendar-listener -- --arch ${{ env.BUILD_ARCH }}
+
+      - name: Download platform binaries
+        run: |
+          node scripts/download-whisper-cpp.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
+          node scripts/download-llama-server.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
+          node scripts/download-sherpa-onnx.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
+          node scripts/download-yt-dlp.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
+          node scripts/download-qdrant.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
+          node scripts/download-meeting-aec-helper.js --current --platform darwin --arch ${{ env.BUILD_ARCH }}
+          node scripts/download-whisper-vad-model.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+
+      - name: Cache Electron
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/electron
+          key: qa-macos-${{ env.BUILD_ARCH }}-electron-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: qa-macos-${{ env.BUILD_ARCH }}-electron-
+
+      - name: Create runtime env
+        run: |
+          echo "GOOGLE_CALENDAR_CLIENT_ID=${{ secrets.GOOGLE_CALENDAR_CLIENT_ID }}" >> .env
+          echo "GOOGLE_CALENDAR_CLIENT_SECRET=${{ secrets.GOOGLE_CALENDAR_CLIENT_SECRET }}" >> .env
+          echo "MICROSOFT_CALENDAR_CLIENT_ID=${{ secrets.MICROSOFT_CALENDAR_CLIENT_ID }}" >> .env
+
+      - name: Build unsigned macOS app
+        run: |
+          pnpm build:renderer
+          cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --${{ env.BUILD_ARCH }} --publish never
+        env:
+          TARGET_ARCH: ${{ env.BUILD_ARCH }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+          VITE_AUTH_URL: ${{ vars.VITE_AUTH_URL || 'https://auth.openwhispr.com' }}
+          VITE_OPENWHISPR_API_URL: ${{ vars.VITE_OPENWHISPR_API_URL }}
+          VITE_OPENWHISPR_OAUTH_CALLBACK_URL: ${{ vars.VITE_OPENWHISPR_OAUTH_CALLBACK_URL }}
+
+      - name: Verify packaged macOS app
+        run: |
+          APP_PATH=$(ls -d dist/mac*/OpenWhispr.app | head -n1)
+          test -d "$APP_PATH" || { echo "Missing OpenWhispr.app in dist/"; exit 1; }
+          for bin in macos-audio-tap macos-globe-listener macos-fast-paste macos-mic-listener macos-text-monitor macos-media-remote; do
+            test -x "$APP_PATH/Contents/Resources/bin/$bin" || { echo "Missing in bundle: $bin"; exit 1; }
+          done
+
+      - name: Package QA zip
+        run: |
+          mkdir -p dist/qa
+          ZIP_PATH="dist/qa/${QA_TAG}.zip"
+
+          DMG=$(ls dist/*.dmg 2>/dev/null | head -n1 || true)
+          if [ -n "$DMG" ]; then
+            echo "Packaging DMG into ${QA_TAG}.zip"
+            zip -j "$ZIP_PATH" "$DMG"
+          else
+            APP_PATH=$(ls -d dist/mac*/OpenWhispr.app | head -n1)
+            echo "Packaging .app into ${QA_TAG}.zip"
+            ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+          fi
+
+          ls -lh "$ZIP_PATH"
+
+      - name: Upload QA macOS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.QA_TAG }}
+          path: dist/qa/${{ env.QA_TAG }}.zip
+          retention-days: 1
+          if-no-files-found: error
